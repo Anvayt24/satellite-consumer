@@ -110,6 +110,7 @@ def main() -> None:
             executor=conf.get_string("consumer.executor"),
             jump_to_latest=conf.get_bool("consumer.jump_to_latest"),
             retries=conf.get_int("consumer.retries"),
+            request_timeout=conf.get_int("consumer.request_timeout"),
         ),
     )
 

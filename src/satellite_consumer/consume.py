@@ -25,12 +25,24 @@ from satellite_consumer import models, storage
 from satellite_consumer.download_eumetsat import download_raw, get_products_iterator
 from satellite_consumer.exceptions import DownloadError, ValidationError
 from satellite_consumer.process import process_raw
+from satellite_consumer.request_patch import construct_patched_request_function
 
 if TYPE_CHECKING:
     import icechunk.repository
 
 warnings.simplefilter(action="ignore", category=UnstableSpecificationWarning)
 log = logging.getLogger("sat_consumer")
+
+
+def init_worker(timeout: int) -> None:
+    """Patch the `eumdac.request._request()` function in all workers."""
+    import eumdac.request
+
+    eumdac.request._request = construct_patched_request_function(
+        max_retries=3,
+        backoff_factor=0.3,
+        timeout=timeout,
+    )
 
 
 T = TypeVar("T")  # Type of the input
@@ -43,6 +55,7 @@ async def _buffered_apply(
     buffer_size: int,
     max_workers: int,
     executor: Literal["threads", "processes"],
+    initializer: Callable[[], None] | None = None,
 ) -> AsyncIterator[R]:
     """Asynchronously applies a synchronous function to items using a sliding window buffer.
 
@@ -56,6 +69,7 @@ async def _buffered_apply(
         buffer_size: The length of the buffer.
         max_workers: The number of workers in the pool.
         executor: "threads" or "processes".
+        initializer: Function that is called at the start of each worker process.
 
     Yields:
         The result of `func` applied to each item from `item_iter`, in the original order.
@@ -64,7 +78,7 @@ async def _buffered_apply(
 
     ExecutorClass = ProcessPoolExecutor if executor == "processes" else ThreadPoolExecutor
 
-    with ExecutorClass(max_workers=max_workers) as pool:
+    with ExecutorClass(max_workers=max_workers, initializer=initializer) as pool:
         tasks: deque[asyncio.Future[R]] = deque()
 
         # Fill the buffer initially
@@ -102,7 +116,7 @@ def _download_and_process(
         return ValidationError(f"Product {product} qualityStatus is {product.qualityStatus}")
 
     try:
-        log.debug("downloading %s", product._id)
+        t_start = time.time()
         raw_filepaths = download_raw(
             product=product,
             folder=folder,
@@ -111,12 +125,18 @@ def _download_and_process(
             retries=retries,
         )
 
-        log.debug("processing %s", product._id)
+        t_dl = time.time()
         ds = process_raw(
             paths=raw_filepaths,
             channels=channels,
             resolution_meters=resolution_meters,
             crop_region_lonlat=crop_region_lonlat,
+        )
+
+        t_end = time.time()
+        log.debug(
+            f"Downloaded ({t_dl - t_start:.2f}s) and processed ({t_end - t_dl:.2f}s)"
+            f" for timestamp {np.datetime_as_string(ds.time.values[0], unit='s')}"
         )
 
         return ds
@@ -189,6 +209,7 @@ async def consume_to_store(
     max_workers: int,
     accum_writes: int,
     executor: Literal["threads", "processes"],
+    request_timeout: int,
     use_icechunk: bool = False,
     aws_credentials: tuple[
         str | None,
@@ -248,6 +269,9 @@ async def consume_to_store(
         retries=retries,
     )
 
+    # This function is run in all worker processes
+    bound_initializer = partial(init_worker, request_timeout)
+
     def _not_stored(product: eumdac.product.Product) -> bool:
         rounded_time: dt.datetime = (
             pd.Timestamp(product.sensing_end)
@@ -270,18 +294,16 @@ async def consume_to_store(
         buffer_size=buffer_size,
         max_workers=max_workers,
         executor=executor,
+        initializer=bound_initializer,
     ):
         total_num += 1
 
         if isinstance(item, xr.Dataset):
-            log.debug(f"pulled image for timestamp {pd.Timestamp(item.time.item())}")
             results.append(item)
 
             # If we've reached the write block size, concat the datasets and write out
             if len(results) == accum_writes:
                 ds = xr.concat(results, dim="time") if accum_writes > 1 else results[0]
-
-                log.debug(f"saving last {accum_writes} accumulated images")
 
                 # Check the non-append coords match the coords already in the store
                 if store_ds is None:
@@ -341,8 +363,6 @@ async def consume_to_store(
     # Write out any remaining values
     if len(results) > 0:
         ds = xr.concat(results, dim="time") if accum_writes > 1 else results[0]
-
-        log.debug(f"saving last {accum_writes} accumulated images")
 
         storage.write_to_store(
             ds=ds,
