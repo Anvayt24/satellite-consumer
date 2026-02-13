@@ -23,10 +23,10 @@ def _make_earth_mask(shape: tuple[int, int], fraction: float = 1.0) -> np.ndarra
     return mask.reshape(shape)
 
 
-def _make_mock_area_def(y_size: int, x_size: int):
+def _make_mock_area_def(y_size: int, x_size: int) -> MagicMock:
     """Create a mock AreaDefinition that returns all-finite lons (all on-earth)."""
     mock = MagicMock()
-    lons = da.from_array(np.ones((y_size, x_size)), chunks=500)
+    lons = da.from_array(np.ones((y_size, x_size)), chunks=500)  # type: ignore[no-untyped-call]
     mock.get_lonlats.return_value = (lons, lons)
     return mock
 
@@ -34,12 +34,12 @@ def _make_mock_area_def(y_size: int, x_size: int):
 class TestComputeChannelMetrics(unittest.TestCase):
     """Test per-channel metric computation."""
 
-    def setUp(self):
+    def setUp(self) -> None:
         # 10x10 grid where center 6x6 is on-earth (36 pixels)
         self.earth_mask = np.zeros((10, 10), dtype=bool)
         self.earth_mask[2:8, 2:8] = True
 
-    def test_valid_data(self):
+    def test_valid_data(self) -> None:
         data = np.ones((10, 10), dtype=np.float32) * 5.0
         result = compute_channel_metrics(data, self.earth_mask)
         self.assertAlmostEqual(result["nan_ratio"], 0.0)
@@ -52,13 +52,13 @@ class TestComputeChannelMetrics(unittest.TestCase):
         for v in result.values():
             self.assertIsInstance(v, float)
 
-    def test_all_nan(self):
+    def test_all_nan(self) -> None:
         data = np.full((10, 10), np.nan, dtype=np.float32)
         result = compute_channel_metrics(data, self.earth_mask)
         self.assertAlmostEqual(result["nan_ratio"], 1.0)
         self.assertAlmostEqual(result["valid_pixel_ratio"], 0.0)
 
-    def test_partial_nan(self):
+    def test_partial_nan(self) -> None:
         data = np.ones((10, 10), dtype=np.float32) * 3.0
         # Set half of the 36 on-earth pixels to NaN
         data[2:5, 2:8] = np.nan  # 18 NaN pixels
@@ -66,7 +66,7 @@ class TestComputeChannelMetrics(unittest.TestCase):
         self.assertAlmostEqual(result["nan_ratio"], 0.5)
         self.assertAlmostEqual(result["valid_pixel_ratio"], 0.5)
 
-    def test_empty_earth_mask(self):
+    def test_empty_earth_mask(self) -> None:
         data = np.ones((10, 10), dtype=np.float32)
         empty_mask = np.zeros((10, 10), dtype=bool)
         result = compute_channel_metrics(data, empty_mask)
@@ -77,7 +77,7 @@ class TestComputeChannelMetrics(unittest.TestCase):
 class TestComputeSequenceMetrics(unittest.TestCase):
     """Test sequence-level metric computation."""
 
-    def test_basic(self):
+    def test_basic(self) -> None:
         ds = xr.Dataset(
             coords={
                 "time": [np.datetime64("2024-01-01T00:00", "ns")],
@@ -102,7 +102,7 @@ class TestComputeSequenceMetrics(unittest.TestCase):
 class TestComputeDataQualityMetrics(unittest.TestCase):
     """Test the main orchestrator function."""
 
-    def test_disabled_returns_empty(self):
+    def test_disabled_returns_empty(self) -> None:
         result = compute_data_quality_metrics(
             ds=MagicMock(),
             area_def=MagicMock(),
@@ -110,7 +110,7 @@ class TestComputeDataQualityMetrics(unittest.TestCase):
         )
         self.assertEqual(result, {})
 
-    def test_enabled_pre_stack_layout(self):
+    def test_enabled_pre_stack_layout(self) -> None:
         """Test metrics with pre-stack layout (each channel as separate data_var)."""
         ds = xr.Dataset(
             coords={
@@ -131,7 +131,7 @@ class TestComputeDataQualityMetrics(unittest.TestCase):
         self.assertIn("IR_108", result["per_channel"])
         self.assertIn("mean_nan_ratio_all_channels", result["sequence_level"])
 
-    def test_enabled_post_stack_layout(self):
+    def test_enabled_post_stack_layout(self) -> None:
         """Test metrics with post-stack layout (single 'data' var with channel dim)."""
         ds = xr.Dataset(
             coords={
@@ -152,7 +152,7 @@ class TestComputeDataQualityMetrics(unittest.TestCase):
         self.assertIn("per_channel", result)
         self.assertEqual(len(result["per_channel"]), 2)
 
-    def test_metrics_are_json_serializable(self):
+    def test_metrics_are_json_serializable(self) -> None:
         """Verify all metrics can be serialized to JSON (no numpy scalars)."""
         import json
 
