@@ -89,3 +89,48 @@ class TestStorage(unittest.TestCase):
                     )
                     store_ds = xr.open_zarr(test["dst"], consolidated=False)
                     self.assertTrue((store_ds.data_vars["data"].isel(time=0).values == 1.0).all())
+
+    def test_write_to_store_preserves_quality_metrics(self) -> None:
+        """Test that data_quality_metrics in attrs survive a Zarr write+read cycle."""
+        import json
+
+        metrics = {
+            "per_channel": {
+                "VIS": {
+                    "nan_ratio": 0.05,
+                    "valid_pixel_ratio": 0.95,
+                    "mean_intensity": 42.0,
+                    "std_intensity": 3.14,
+                    "min_intensity": 0.1,
+                    "max_intensity": 99.9,
+                },
+            },
+            "sequence_level": {
+                "channel_count": 2,
+                "timestamp_iso": "2024-01-01T00:00:00",
+                "mean_nan_ratio_all_channels": 0.05,
+            },
+        }
+
+        ds_with_metrics = ds.copy(deep=True)
+        ds_with_metrics.attrs["data_quality_metrics"] = metrics
+
+        with tempfile.TemporaryDirectory(suffix="zarr") as tmpdir:
+            dst = tmpdir + "/test_metrics.zarr"
+            write_to_store(
+                ds=ds_with_metrics,
+                dst=dst,
+                append_dim="time",
+                encoding=encoding,
+                write_new=True,
+            )
+            store_ds = xr.open_zarr(dst, consolidated=False)
+            self.assertIn("data_quality_metrics", store_ds.attrs)
+
+            stored = store_ds.attrs["data_quality_metrics"]
+            if isinstance(stored, str):
+                stored = json.loads(stored)
+
+            self.assertIn("per_channel", stored)
+            self.assertAlmostEqual(stored["per_channel"]["VIS"]["nan_ratio"], 0.05)
+            self.assertEqual(stored["sequence_level"]["channel_count"], 2)

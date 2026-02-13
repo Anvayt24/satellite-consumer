@@ -105,6 +105,7 @@ def _download_and_process(
     resolution_meters: int,
     crop_region_lonlat: tuple[float, float, float, float] | None,
     keep_raw: bool,
+    enable_quality_metrics: bool = False,
 ) -> xr.Dataset | Exception:
     """Wrapper of the download and process functions."""
     raw_filepaths: list[str] = []
@@ -129,6 +130,7 @@ def _download_and_process(
             channels=channels,
             resolution_meters=resolution_meters,
             crop_region_lonlat=crop_region_lonlat,
+            enable_quality_metrics=enable_quality_metrics,
         )
 
         t_end = time.time()
@@ -208,6 +210,7 @@ async def consume_to_store(
     accum_writes: int,
     executor: Literal["threads", "processes"],
     request_timeout: int,
+    enable_quality_metrics: bool = False,
     use_icechunk: bool = False,
     aws_credentials: tuple[
         str | None,
@@ -262,6 +265,7 @@ async def consume_to_store(
         resolution_meters=resolution_meters,
         crop_region_lonlat=crop_region_lonlat,
         keep_raw=keep_raw,
+        enable_quality_metrics=enable_quality_metrics,
     )
 
     # This function is run in all worker processes

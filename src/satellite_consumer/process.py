@@ -16,7 +16,7 @@ from pyresample.geometry import AreaDefinition
 from satpy.readers.seviri_l1b_native import NativeMSGFileHandler
 from satpy.scene import Scene
 
-from satellite_consumer import models
+from satellite_consumer import models, quality_metrics
 from satellite_consumer.exceptions import ValidationError
 
 log = logging.getLogger("sat_consumer")
@@ -49,6 +49,7 @@ def process_raw(
     channels: list[models.SpectralChannel],
     resolution_meters: int,
     crop_region_lonlat: tuple[float, float, float, float] | None = None,
+    enable_quality_metrics: bool = False,
 ) -> xr.Dataset:
     """Process a set of raw files into an xarray DataArray.
 
@@ -58,6 +59,7 @@ def process_raw(
         resolution_meters: Desired spatial resolution in meters.
         crop_region_lonlat: Optional tuple defining the lon-lat coordinate
             region to crop to, in the form (lon_min, lat_min, lon_max, lat_max).
+        enable_quality_metrics: Whether to compute data quality metrics.
     """
     try:
         # Meteosat 3rd gen don't output .nat files, and so requires a different loader
@@ -90,6 +92,7 @@ def process_raw(
         scene=scene,
         channels=channels,
         crop_region_lonlat=crop_region_lonlat,
+        enable_quality_metrics=enable_quality_metrics,
     )
 
     return ds
@@ -99,6 +102,7 @@ def _map_scene_to_dataset(
     scene: Scene,
     channels: list[models.SpectralChannel],
     crop_region_lonlat: tuple[float, float, float, float] | None = None,
+    enable_quality_metrics: bool = False,
 ) -> xr.Dataset:
     """Converts a Scene with satellite data into a data array.
 
@@ -131,6 +135,13 @@ def _map_scene_to_dataset(
     if nan_frac > 0.2:
         raise ValidationError(f"Too many NaN values on earth-disk in the data array: {nan_frac}")
 
+    # Compute quality metrics before stacking (each channel is a separate data_var here)
+    quality_metrics_dict = quality_metrics.compute_data_quality_metrics(
+        ds=ds,
+        area_def=area_def,
+        enable=enable_quality_metrics,
+    )
+
     # Stack channels into a new dimension and compile the metadata
     ds = _stack_channels_to_dim(ds, channels)
 
@@ -154,6 +165,9 @@ def _map_scene_to_dataset(
 
     # Serialize attributes to be JSON-compatible
     ds.attrs = _serialize_dict(ds.attrs)
+
+    if quality_metrics_dict:
+        ds.attrs["data_quality_metrics"] = quality_metrics_dict
 
     if crop_region_lonlat is not None:
         transformer = pyproj.Transformer.from_proj(
